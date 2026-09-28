@@ -9,7 +9,7 @@ let cleanup = () => {}
 
 function route(): { kind: 'watch'; token: string } | { kind: 'studio' } {
   const hash = location.hash.replace(/^#/, '')
-  const match = hash.match(/^\/v\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)
+  const match = hash.match(/^\/v\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})$/)
   if (match) return { kind: 'watch', token: match[1] }
   return { kind: 'studio' }
 }

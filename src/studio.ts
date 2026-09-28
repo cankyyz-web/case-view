@@ -47,7 +47,7 @@ export function mountStudio(root: HTMLElement): () => void {
     host.replaceChildren(el('p', { class: 'muted' }, ['Loading links…']))
     try {
       const response = await fetch('/api/shares')
-      const body = (await response.json()) as { shares?: ShareRecord[]; error?: string }
+      const body = (await response.json()) as { shares?: Array<ShareRecord & { link?: string }>; error?: string }
       if (!response.ok) throw new Error(body.error || 'Could not load links.')
       if (dead) return
       host.replaceChildren()
@@ -302,7 +302,9 @@ function shareCard(refreshShares: () => Promise<void>): HTMLElement {
   return el('section', { class: 'stack' }, [
     el('section', { class: 'card' }, [
       el('h2', {}, ['Link']),
-      el('p', { class: 'hint' }, ['Type a PIN or generate one. Leave it blank and a code is made when the link is created.']),
+      el('p', { class: 'hint' }, [
+        'The case folder name becomes the short link, such as #/v/smith-upper. Type a PIN or leave it blank to generate one.',
+      ]),
       caseName,
       el('div', { class: 'copy-row' }, [pin, generate]),
       expiry,
@@ -345,13 +347,26 @@ function copyRow(label: string, value: string): HTMLElement {
   return el('div', { class: 'copy-row' }, [input, button])
 }
 
-function shareRow(row: ShareRecord, onChange: () => Promise<void>): HTMLElement {
+function shareRow(row: ShareRecord & { link?: string }, onChange: () => Promise<void>): HTMLElement {
   const expiry = new Date(row.expires_at)
   const expired = expiry.getTime() <= Date.now()
   const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(expiry)
+  const copy = el('button', { class: 'ghost', type: 'button' }, ['Copy'])
+  copy.addEventListener('click', async () => {
+    if (!row.link) return
+    try {
+      await navigator.clipboard.writeText(row.link)
+      copy.textContent = 'Copied'
+    } catch {
+      copy.textContent = 'Failed'
+    }
+    window.setTimeout(() => {
+      copy.textContent = 'Copy'
+    }, 1400)
+  })
   const revoke = el('button', { class: 'danger', type: 'button' }, ['Revoke'])
   revoke.addEventListener('click', async () => {
-    if (!confirm('Revoke this link? The case files stay in the bucket.')) return
+    if (!confirm('Revoke this link and delete its case folder from storage?')) return
     revoke.disabled = true
     try {
       const response = await fetch('/api/revoke', {
@@ -370,6 +385,6 @@ function shareRow(row: ShareRecord, onChange: () => Promise<void>): HTMLElement 
   })
   return el('div', { class: 'share-row' }, [
     el('span', {}, [`${row.title || 'Case'} · ${expired ? 'Expired' : 'Expires'} ${when}`]),
-    revoke,
+    el('div', { class: 'row-actions' }, [row.link ? copy : el('span'), revoke]),
   ])
 }

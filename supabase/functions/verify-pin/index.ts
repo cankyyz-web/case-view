@@ -43,7 +43,8 @@ Deno.serve(async (req) => {
 
   const token = typeof body.token === 'string' ? body.token : ''
   const pin = typeof body.pin === 'string' ? body.pin : ''
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+  const isId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)
+  if (!isId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(token)) {
     return json({ error: 'missing' }, 404)
   }
   if (!/^\d{4}$/.test(pin)) return json({ error: 'pin' }, 401)
@@ -59,7 +60,7 @@ Deno.serve(async (req) => {
   const { data: row, error } = await admin
     .from('shares')
     .select('id, owner_id, salt, iv, ciphertext, expires_at, failed_attempts, locked_until')
-    .eq('id', token)
+    .eq(isId ? 'id' : 'slug', token)
     .maybeSingle()
 
   if (error) return json({ error: 'server' }, 500)

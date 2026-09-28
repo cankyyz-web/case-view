@@ -79,6 +79,25 @@ function readForm(req: IncomingMessage): Promise<{ fields: Record<string, string
   })
 }
 
+async function deleteCaseFolder(client: SupabaseClient, folder: string): Promise<void> {
+  if (!folder || /[\\/]|\.\./.test(folder)) return
+  const paths: string[] = []
+  let offset = 0
+  while (offset < 1000) {
+    const { data, error } = await client.storage.from(BUCKET).list(folder, { limit: 100, offset })
+    if (error) throw new Error(error.message)
+    const batch = data ?? []
+    for (const item of batch) {
+      if (item.id && item.name) paths.push(`${folder}/${item.name}`)
+    }
+    if (batch.length < 100) break
+    offset += batch.length
+  }
+  if (!paths.length) return
+  const { error } = await client.storage.from(BUCKET).remove(paths)
+  if (error) throw new Error(error.message)
+}
+
 async function signCaseFolder(client: SupabaseClient, folder: string, hours: number) {
   const { data, error } = await client.storage.from(BUCKET).list(folder, { limit: 100 })
   if (error) throw new Error(error.message)
@@ -126,18 +145,22 @@ async function createLink(req: IncomingMessage, res: ServerResponse): Promise<vo
   const { error } = await client.from('shares').insert({
     id: shareId,
     title: folder,
+    slug: folder,
     salt: sealed.salt,
     iv: sealed.iv,
     ciphertext: sealed.ciphertext,
     expires_at: expiresAt,
   })
   if (error) {
-    const hint = /owner_id|not-null|violates/.test(error.message)
+    if (/slug|unique|duplicate/i.test(error.message)) {
+      throw new Error(`A link named ${folder} already exists. Revoke it or choose another name.`)
+    }
+    const hint = /owner_id|not-null|violates|schema cache|slug/.test(error.message)
       ? ' Open supabase/schema.sql, copy it, and run it again in the Supabase SQL editor.'
       : ''
     throw new Error(`${error.message}${hint}`)
   }
-  send(res, 200, { pin, link: viewerLink(shareId), expiresAt, fileCount: signed.length })
+  send(res, 200, { pin, link: viewerLink(folder), expiresAt, fileCount: signed.length })
 }
 
 export async function handleLocalApi(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -160,10 +183,12 @@ export async function handleLocalApi(req: IncomingMessage, res: ServerResponse):
       const client = admin()
       const { data, error } = await client
         .from('shares')
-        .select('id, title, expires_at, created_at, failed_attempts, locked_until')
+        .select('id, title, slug, expires_at, created_at, failed_attempts, locked_until')
         .order('created_at', { ascending: false })
       if (error) throw new Error(error.message)
-      send(res, 200, { shares: data ?? [] })
+      send(res, 200, {
+        shares: (data ?? []).map((row) => ({ ...row, link: viewerLink(row.slug || row.id) })),
+      })
       return true
     }
 
@@ -171,6 +196,10 @@ export async function handleLocalApi(req: IncomingMessage, res: ServerResponse):
       const body = (await readJson(req)) as { id?: string }
       if (!body.id) throw new Error('Missing link id.')
       const client = admin()
+      const { data: share, error: readError } = await client.from('shares').select('id, title').eq('id', body.id).maybeSingle()
+      if (readError) throw new Error(readError.message)
+      if (!share) throw new Error('This link is already gone.')
+      await deleteCaseFolder(client, share.title || '')
       const { error } = await client.from('shares').delete().eq('id', body.id)
       if (error) throw new Error(error.message)
       send(res, 200, { ok: true })

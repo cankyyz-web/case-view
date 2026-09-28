@@ -6,6 +6,7 @@ create table if not exists public.shares (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid,
   title text not null default '',
+  slug text,
   salt text not null,
   iv text not null,
   ciphertext text not null,
@@ -21,6 +22,10 @@ create table if not exists public.shares (
 -- Existing projects created this column as a required account id. The local tool has no account.
 alter table public.shares drop constraint if exists shares_owner_id_fkey;
 alter table public.shares alter column owner_id drop not null;
+alter table public.shares add column if not exists slug text;
+
+create unique index if not exists shares_slug_unique
+  on public.shares (slug);
 
 create index if not exists shares_owner_created
   on public.shares (owner_id, created_at desc);
