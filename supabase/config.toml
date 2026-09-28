@@ -1,0 +1,4 @@
+project_id = "model-webview"
+
+[functions.verify-pin]
+verify_jwt = false
