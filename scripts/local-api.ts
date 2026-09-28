@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import Busboy from 'busboy'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { randomPin, sealShare } from '../supabase/functions/_shared/encrypter'
-import { caseFolderName, displayName, isMeshFile, uniqueFileName } from '../src/names'
+import { caseFolderName, isMeshFile, uniqueFileName } from '../src/names'
 
 const BUCKET = 'cases'
 const HOUR_MS = 60 * 60 * 1000
@@ -91,8 +91,8 @@ async function signCaseFolder(client: SupabaseClient, folder: string, hours: num
   if (signError) throw new Error(signError.message)
   return (signed ?? []).map((item) => {
     if (item.error || !item.signedUrl) throw new Error(item.error || 'Could not sign a case file.')
-    const filename = item.path?.split('/').pop() || 'mesh'
-    return { name: displayName(filename), url: item.signedUrl }
+    const filename = item.path?.split('/').pop() || 'mesh.stl'
+    return { name: filename, url: item.signedUrl }
   })
 }
 

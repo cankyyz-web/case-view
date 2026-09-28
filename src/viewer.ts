@@ -491,16 +491,33 @@ export class ModelViewer {
   }
 }
 
-function parseMesh(filename: string, buffer: ArrayBuffer): Array<{ name: string; geometry: THREE.BufferGeometry }> {
+function meshKind(filename: string, buffer: ArrayBuffer): 'stl' | 'ply' | 'obj' {
   const ext = filename.split('.').pop()?.toLowerCase()
+  if (ext === 'stl' || ext === 'ply' || ext === 'obj') return ext
+  if (buffer.byteLength >= 84) {
+    const count = new DataView(buffer).getUint32(80, true)
+    if (count > 0 && buffer.byteLength === 84 + count * 50) return 'stl'
+  }
+  const head = new TextDecoder()
+    .decode(buffer.slice(0, Math.min(buffer.byteLength, 512)))
+    .trimStart()
+    .toLowerCase()
+  if (head.startsWith('ply')) return 'ply'
+  if (head.startsWith('solid')) return 'stl'
+  if (/^(#|mtllib |usemtl |o |g |v |vn |vt |f )/m.test(head)) return 'obj'
+  throw new Error(`Unsupported file ${filename}`)
+}
+
+function parseMesh(filename: string, buffer: ArrayBuffer): Array<{ name: string; geometry: THREE.BufferGeometry }> {
+  const kind = meshKind(filename, buffer)
   const label = displayName(filename)
-  if (ext === 'stl') {
+  if (kind === 'stl') {
     return [{ name: label, geometry: new STLLoader().parse(buffer) }]
   }
-  if (ext === 'ply') {
+  if (kind === 'ply') {
     return [{ name: label, geometry: new PLYLoader().parse(buffer) }]
   }
-  if (ext === 'obj') {
+  if (kind === 'obj') {
     const root = new OBJLoader().parse(new TextDecoder().decode(buffer))
     root.updateMatrixWorld(true)
     const parts: Array<{ name: string; geometry: THREE.BufferGeometry }> = []
