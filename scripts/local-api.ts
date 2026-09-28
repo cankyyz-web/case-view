@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import Busboy from 'busboy'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { randomPin, sealShare } from '../supabase/functions/_shared/encrypter'
-import { caseFolderName, isMeshFile, uniqueFileName } from '../src/names'
+import { caseFolderName, isCaseFile, isMeshFile, uniqueFileName } from '../src/names'
 
 const BUCKET = 'cases'
 const HOUR_MS = 60 * 60 * 1000
@@ -101,10 +101,9 @@ async function deleteCaseFolder(client: SupabaseClient, folder: string): Promise
 async function signCaseFolder(client: SupabaseClient, folder: string, hours: number) {
   const { data, error } = await client.storage.from(BUCKET).list(folder, { limit: 100 })
   if (error) throw new Error(error.message)
-  const paths = (data ?? [])
-    .filter((item) => item.id && item.name && isMeshFile(item.name))
-    .map((item) => `${folder}/${item.name}`)
-  if (!paths.length) throw new Error('This case folder has no STL, PLY, or OBJ files.')
+  const items = (data ?? []).filter((item) => item.id && item.name && isCaseFile(item.name))
+  if (!items.some((item) => isMeshFile(item.name))) throw new Error('This case folder has no STL, PLY, or OBJ files.')
+  const paths = items.map((item) => `${folder}/${item.name}`)
   const expiresIn = Math.max(60, Math.round(hours * 3600))
   const { data: signed, error: signError } = await client.storage.from(BUCKET).createSignedUrls(paths, expiresIn)
   if (signError) throw new Error(signError.message)
@@ -128,7 +127,7 @@ async function createLink(req: IncomingMessage, res: ServerResponse): Promise<vo
 
   const used = new Set<string>()
   for (const file of files) {
-    if (!isMeshFile(file.filename)) continue
+    if (!isCaseFile(file.filename)) continue
     const storedName = uniqueFileName(file.filename, used)
     const path = `${folder}/${storedName}`
     const { error } = await client.storage.from(BUCKET).upload(path, file.buffer, {

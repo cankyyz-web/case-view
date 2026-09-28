@@ -1,5 +1,5 @@
 import { clear, el } from './dom'
-import { displayName, formatBytes, isMeshFile } from './names'
+import { displayName, formatBytes, isCaseFile, isMeshFile } from './names'
 import { randomPin } from '../supabase/functions/_shared/encrypter'
 import type { ShareRecord } from './share'
 import { mountStage, type StageSource } from './stage'
@@ -99,7 +99,7 @@ function header(): HTMLElement {
 function filesCard(): HTMLElement {
   const list = el('div', { class: 'stack', id: 'file-list' })
   const note = el('p', { class: 'error' })
-  const fileInput = el('input', { type: 'file', accept: '.stl,.ply,.obj', multiple: 'true' })
+  const fileInput = el('input', { type: 'file', accept: '.stl,.ply,.obj,.mtl,.jpg,.jpeg,.png,.webp', multiple: 'true' })
   fileInput.hidden = true
   const folderInput = el('input', { type: 'file', multiple: 'true' })
   folderInput.multiple = true
@@ -108,7 +108,7 @@ function filesCard(): HTMLElement {
 
   const drop = el('div', { class: 'drop' }, [
     el('strong', {}, ['Drop meshes here']),
-    el('p', { class: 'hint' }, ['STL, PLY, and OBJ. Chosen files show up in the list, then upload when you create the link.']),
+    el('p', { class: 'hint' }, ['STL, PLY, and OBJ. A photo model also needs its MTL file and the image.']),
     el('div', { class: 'row-actions' }, [
       el('button', { class: 'ghost', type: 'button', id: 'browse' }, ['Add files']),
       el('button', { class: 'ghost', type: 'button', id: 'folder' }, ['Add folder']),
@@ -129,7 +129,7 @@ function filesCard(): HTMLElement {
       })
       list.append(
         el('div', { class: 'file-row' }, [
-          el('span', {}, [`${displayName(item.file.name)} · ${formatBytes(item.file.size)}`]),
+          el('span', {}, [`${fileLabel(item.file.name)} · ${formatBytes(item.file.size)}`]),
           remove,
         ]),
       )
@@ -139,7 +139,7 @@ function filesCard(): HTMLElement {
   const addFiles = (incoming: Iterable<File>) => {
     const skipped: string[] = []
     for (const file of incoming) {
-      if (!isMeshFile(file.name)) continue
+      if (!isCaseFile(file.name)) continue
       if (file.size > MAX_BYTES) {
         skipped.push(file.name)
         continue
@@ -196,6 +196,12 @@ function filesCard(): HTMLElement {
     note,
     el('div', { class: 'row-actions' }, [preview, sample]),
   ])
+}
+
+function fileLabel(name: string): string {
+  const base = name.split(/[/\\]/).pop() || name
+  if (isMeshFile(base)) return displayName(base)
+  return base
 }
 
 async function openPreview(): Promise<void> {

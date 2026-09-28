@@ -1,9 +1,10 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js'
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js'
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js'
 import { STLLoader } from 'three/addons/loaders/STLLoader.js'
-import { colorCss, colorForName, displayName } from './names'
+import { colorCss, colorForName, displayName, isCompanionFile, isMeshFile, sanitizeFileName } from './names'
 import { buildSample } from './sample'
 
 export type ViewName = 'default' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
@@ -31,6 +32,7 @@ type Entry = {
   wireframe: boolean
   mesh: THREE.Mesh
   material: THREE.MeshStandardMaterial
+  map: THREE.Texture | null
 }
 
 const VIEW_DIRS: Record<Exclude<ViewName, 'default'>, THREE.Vector3> = {
@@ -57,6 +59,7 @@ export class ModelViewer {
   private root = new THREE.Group()
   private key = new THREE.DirectionalLight(0xffffff, 1.25)
   private entries: Entry[] = []
+  private blobUrls: string[] = []
   private shading: ShadingMode = 'smooth'
   private surface: SurfaceMode = 'solid'
   private projection: ProjectionMode = 'perspective'
@@ -140,12 +143,17 @@ export class ModelViewer {
     this.clearMeshes()
     const loaded: string[] = []
     const failed: string[] = []
+    const assets = assetMap(files)
     files.forEach((file, index) => {
+      if (!isMeshFile(file.name)) {
+        if (!isCompanionFile(file.name)) failed.push(displayName(file.name))
+        return
+      }
       try {
-        const parts = parseMesh(file.name, file.buffer)
+        const parts = parseMesh(file.name, file.buffer, assets, this.blobUrls)
         if (parts.length === 0) throw new Error('empty')
         for (const part of parts) {
-          this.addMesh(part.name, part.geometry, index)
+          this.addMesh(part.name, part.geometry, index, part.map)
           loaded.push(part.name)
         }
       } catch {
@@ -286,21 +294,35 @@ export class ModelViewer {
   }
 
   private clearMeshes(): void {
+    const disposedMaps = new Set<THREE.Texture>()
     for (const entry of this.entries) {
       this.root.remove(entry.mesh)
       entry.mesh.geometry.dispose()
+      if (entry.map && !disposedMaps.has(entry.map)) {
+        entry.map.dispose()
+        disposedMaps.add(entry.map)
+      }
+      entry.material.map = null
       entry.material.dispose()
     }
+    for (const url of this.blobUrls) URL.revokeObjectURL(url)
+    this.blobUrls = []
     this.entries = []
     this.hasVertexColors = false
   }
 
-  private addMesh(name: string, geometry: THREE.BufferGeometry, index: number): void {
+  private addMesh(name: string, geometry: THREE.BufferGeometry, index: number, map?: THREE.Texture | null): void {
     geometry.computeVertexNormals()
     const hasColors = geometry.hasAttribute('color')
     const color = colorForName(name, index)
+    const texture = map ?? null
+    if (texture) {
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.needsUpdate = true
+    }
     const material = new THREE.MeshStandardMaterial({
-      color,
+      color: texture ? 0xffffff : color,
+      map: texture,
       roughness: /teeth|tooth/i.test(name) ? 0.28 : /nerve/i.test(name) ? 0.42 : 0.64,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -316,6 +338,7 @@ export class ModelViewer {
       wireframe: false,
       mesh,
       material,
+      map: texture,
     }
     this.applyMaterial(entry)
     this.root.add(mesh)
@@ -356,7 +379,8 @@ export class ModelViewer {
 
   private applyMaterial(entry: Entry): void {
     const useVertex = this.surface === 'vertex' && entry.hasColors
-    entry.material.color.set(useVertex ? 0xffffff : entry.color)
+    entry.material.map = useVertex ? null : entry.map
+    entry.material.color.set(useVertex || entry.map ? 0xffffff : entry.color)
     entry.material.vertexColors = useVertex
     entry.material.flatShading = this.shading === 'flat'
     entry.material.wireframe = entry.wireframe
@@ -508,25 +532,93 @@ function meshKind(filename: string, buffer: ArrayBuffer): 'stl' | 'ply' | 'obj' 
   throw new Error(`Unsupported file ${filename}`)
 }
 
-function parseMesh(filename: string, buffer: ArrayBuffer): Array<{ name: string; geometry: THREE.BufferGeometry }> {
+type MeshPart = { name: string; geometry: THREE.BufferGeometry; map: THREE.Texture | null }
+
+function assetMap(files: Array<{ name: string; buffer: ArrayBuffer }>): Map<string, ArrayBuffer> {
+  const assets = new Map<string, ArrayBuffer>()
+  for (const file of files) {
+    const base = (file.name.split(/[/\\]/).pop() || file.name).toLowerCase()
+    assets.set(base, file.buffer)
+    assets.set(sanitizeFileName(base).toLowerCase(), file.buffer)
+  }
+  return assets
+}
+
+function lookupAsset(assets: Map<string, ArrayBuffer>, ref: string): ArrayBuffer | undefined {
+  const base = (ref.split(/[/\\]/).pop() || ref).trim().toLowerCase()
+  return assets.get(base) || assets.get(sanitizeFileName(base).toLowerCase())
+}
+
+function imageType(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase()
+  if (ext === 'png') return 'image/png'
+  if (ext === 'webp') return 'image/webp'
+  return 'image/jpeg'
+}
+
+function materialsForObj(filename: string, text: string, assets: Map<string, ArrayBuffer>, blobUrls: string[]) {
+  const named = text.match(/^mtllib\s+(.+)$/im)?.[1]?.trim()
+  const stem = (filename.split(/[/\\]/).pop() || filename).replace(/\.[^.]+$/, '')
+  const mtl = (named && lookupAsset(assets, named)) || lookupAsset(assets, `${stem}.mtl`)
+  if (!mtl) return null
+  const blobs = new Map<string, string>()
+  const manager = new THREE.LoadingManager()
+  manager.setURLModifier((url) => {
+    const base = decodeURIComponent(url.split(/[?#]/)[0].split(/[/\\]/).pop() || url)
+    const image = lookupAsset(assets, base)
+    if (!image) return url
+    const key = base.toLowerCase()
+    let blobUrl = blobs.get(key)
+    if (!blobUrl) {
+      blobUrl = URL.createObjectURL(new Blob([new Uint8Array(image)], { type: imageType(base) }))
+      blobs.set(key, blobUrl)
+      blobUrls.push(blobUrl)
+    }
+    return blobUrl
+  })
+  const creator = new MTLLoader(manager).parse(new TextDecoder().decode(mtl), '')
+  creator.preload()
+  return creator
+}
+
+function materialMap(material: THREE.Material | THREE.Material[]): THREE.Texture | null {
+  const first = Array.isArray(material) ? material[0] : material
+  const map = (first as THREE.MeshPhongMaterial).map
+  return map ?? null
+}
+
+function parseMesh(
+  filename: string,
+  buffer: ArrayBuffer,
+  assets: Map<string, ArrayBuffer>,
+  blobUrls: string[],
+): MeshPart[] {
   const kind = meshKind(filename, buffer)
   const label = displayName(filename)
   if (kind === 'stl') {
-    return [{ name: label, geometry: new STLLoader().parse(buffer) }]
+    return [{ name: label, geometry: new STLLoader().parse(buffer), map: null }]
   }
   if (kind === 'ply') {
-    return [{ name: label, geometry: new PLYLoader().parse(buffer) }]
+    return [{ name: label, geometry: new PLYLoader().parse(buffer), map: null }]
   }
   if (kind === 'obj') {
-    const root = new OBJLoader().parse(new TextDecoder().decode(buffer))
+    const text = new TextDecoder().decode(buffer)
+    const loader = new OBJLoader()
+    const materials = materialsForObj(filename, text, assets, blobUrls)
+    if (materials) loader.setMaterials(materials)
+    const root = loader.parse(text)
     root.updateMatrixWorld(true)
-    const parts: Array<{ name: string; geometry: THREE.BufferGeometry }> = []
+    const parts: MeshPart[] = []
     root.traverse((obj) => {
       const mesh = obj as THREE.Mesh
       if (!mesh.isMesh) return
       const geometry = mesh.geometry.clone()
       geometry.applyMatrix4(mesh.matrixWorld)
-      parts.push({ name: mesh.name ? displayName(mesh.name) : label, geometry })
+      parts.push({
+        name: mesh.name ? displayName(mesh.name) : label,
+        geometry,
+        map: materialMap(mesh.material),
+      })
     })
     if (parts.length === 1) parts[0].name = label
     return parts

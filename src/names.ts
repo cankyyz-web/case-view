@@ -89,8 +89,20 @@ export function formatBytes(bytes: number): string {
 }
 
 const MESH_EXT = new Set(['stl', 'ply', 'obj'])
+const COMPANION_EXT = new Set(['mtl', 'jpg', 'jpeg', 'png', 'webp'])
+
+export function fileExtension(name: string): string {
+  return name.split('.').pop()?.toLowerCase() ?? ''
+}
 
 export function isMeshFile(name: string): boolean {
-  const ext = name.split('.').pop()?.toLowerCase() ?? ''
-  return MESH_EXT.has(ext)
+  return MESH_EXT.has(fileExtension(name))
+}
+
+export function isCompanionFile(name: string): boolean {
+  return COMPANION_EXT.has(fileExtension(name))
+}
+
+export function isCaseFile(name: string): boolean {
+  return isMeshFile(name) || isCompanionFile(name)
 }
