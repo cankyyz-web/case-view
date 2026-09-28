@@ -41,8 +41,8 @@ export function mountStage(
     ['vertex', 'Vertex color'],
   ])
   const projection = selectField([
-    ['perspective', 'Perspective'],
     ['ortho', 'Orthographic'],
+    ['perspective', 'Perspective'],
   ])
   const upAxis = selectField([
     ['z', 'Z up (dental)'],
@@ -165,15 +165,8 @@ export function mountStage(
       meshBtn.setAttribute('aria-pressed', next ? 'true' : 'false')
       viewer.setWireframe(info.id, next)
     })
-    const slider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '100',
-      value: String(Math.round(info.transparency * 100)),
-      'aria-label': `${info.name} transparency`,
-    })
-    slider.addEventListener('input', () => {
-      viewer.setTransparency(info.id, Number(slider.value) / 100)
+    const slider = opacitySlider(info.name, info.transparency, (transparency) => {
+      viewer.setTransparency(info.id, transparency)
     })
     const swatch = el('span', { class: 'swatch' })
     swatch.style.background = info.color
@@ -224,6 +217,87 @@ export function mountStage(
     mobileQuery.removeEventListener('change', onLayout)
     viewer.dispose()
   }
+}
+
+function opacitySlider(name: string, transparency: number, onChange: (transparency: number) => void): HTMLElement {
+  const line = el('span', { class: 'opacity-line' })
+  const fill = el('span', { class: 'opacity-fill' })
+  const thumb = el('span', { class: 'opacity-thumb' })
+  const track = el(
+    'div',
+    {
+      class: 'opacity',
+      role: 'slider',
+      tabindex: '0',
+      'aria-label': `${name} opacity`,
+      'aria-valuemin': '0',
+      'aria-valuemax': '100',
+    },
+    [line, fill, thumb],
+  )
+  const paint = (opacity: number, emit: boolean) => {
+    const next = Math.min(100, Math.max(0, Math.round(opacity)))
+    fill.style.width = `${next}%`
+    thumb.style.left = `${next}%`
+    track.setAttribute('aria-valuenow', String(next))
+    if (emit) onChange(1 - next / 100)
+  }
+  paint(Math.round((1 - transparency) * 100), false)
+
+  let pointer = -1
+  let originX = 0
+  let originY = 0
+  let dragging = false
+  const valueAt = (clientX: number) => {
+    const rect = track.getBoundingClientRect()
+    if (rect.width <= 0) return 100
+    return ((clientX - rect.left) / rect.width) * 100
+  }
+  track.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    pointer = event.pointerId
+    originX = event.clientX
+    originY = event.clientY
+    dragging = false
+  })
+  track.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== pointer) return
+    const dx = event.clientX - originX
+    const dy = event.clientY - originY
+    if (!dragging) {
+      if (Math.hypot(dx, dy) < 8) return
+      if (Math.abs(dy) > Math.abs(dx)) {
+        pointer = -1
+        return
+      }
+      dragging = true
+      track.setPointerCapture(event.pointerId)
+    }
+    paint(valueAt(event.clientX), true)
+  })
+  track.addEventListener('pointerup', (event) => {
+    if (event.pointerId !== pointer) return
+    const dx = event.clientX - originX
+    const dy = event.clientY - originY
+    if (!dragging && Math.abs(dy) <= Math.abs(dx) && Math.hypot(dx, dy) < 8) paint(valueAt(event.clientX), true)
+    pointer = -1
+    dragging = false
+  })
+  track.addEventListener('pointercancel', () => {
+    pointer = -1
+    dragging = false
+  })
+  track.addEventListener('keydown', (event) => {
+    const current = Number(track.getAttribute('aria-valuenow') || '100')
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      paint(current + 5, true)
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      paint(current - 5, true)
+    }
+  })
+  return track
 }
 
 function labeled(text: string, control: HTMLElement): HTMLLabelElement {

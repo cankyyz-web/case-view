@@ -62,7 +62,7 @@ export class ModelViewer {
   private blobUrls: string[] = []
   private shading: ShadingMode = 'smooth'
   private surface: SurfaceMode = 'solid'
-  private projection: ProjectionMode = 'perspective'
+  private projection: ProjectionMode = 'ortho'
   private upAxis: UpAxis = 'z'
   private background: 'light' | 'dark' = 'light'
   private frame = 0
@@ -116,7 +116,7 @@ export class ModelViewer {
     this.pivot.renderOrder = 10
     this.scene.add(this.pivot)
 
-    this.camera = this.persp
+    this.camera = this.ortho
     this.controls = new OrbitControls(this.camera, canvas)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.08

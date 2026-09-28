@@ -198,7 +198,36 @@ h2 { font-size: 15px; letter-spacing: 0.01em; }
   flex: none;
 }
 .icon-btn[aria-pressed="true"] { color: var(--accent); border-color: #b9cff8; background: #eef3ff; }
-.obj input[type="range"] { width: 100%; margin-top: 6px; }
+.opacity {
+  position: relative;
+  height: 28px;
+  margin-top: 4px;
+  touch-action: pan-y;
+  cursor: pointer;
+}
+.opacity-line, .opacity-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 99px;
+  pointer-events: none;
+}
+.opacity-line { right: 0; background: #c5cad3; }
+.opacity-fill { background: var(--accent); }
+.opacity-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
