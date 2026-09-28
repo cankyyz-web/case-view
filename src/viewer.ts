@@ -318,7 +318,7 @@ export class ModelViewer {
     map?: THREE.Texture | null,
     kind: 'mesh' | 'points' | 'line' = 'mesh',
   ): void {
-    if (kind === 'mesh') geometry.computeVertexNormals()
+    if (kind === 'mesh' && !geometry.getAttribute('normal')) geometry.computeVertexNormals()
     const hasColors = geometry.hasAttribute('color')
     const color = colorForName(name, index)
     const texture = map ?? null
@@ -596,7 +596,18 @@ function materialsForObj(filename: string, text: string, assets: Map<string, Arr
     }
     return blobUrl
   })
-  const creator = new MTLLoader(manager).parse(decodeMeshText(mtl), '')
+  const mtlText = decodeMeshText(mtl)
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim()
+      const splitAt = trimmed.indexOf(' ')
+      if (splitAt < 0) return trimmed
+      const key = trimmed.slice(0, splitAt).toLowerCase()
+      if (!key.startsWith('map_') && key !== 'bump' && key !== 'norm' && key !== 'disp') return trimmed
+      return `${key} ${textureFileName(trimmed.slice(splitAt + 1))}`
+    })
+    .join('\n')
+  const creator = new MTLLoader(manager).parse(mtlText, '')
   creator.preload()
   return creator
 }
@@ -623,19 +634,24 @@ function decodeMeshText(buffer: ArrayBuffer): string {
 }
 
 function prepareObjText(text: string): string {
-  return text
-    .split(/\r\n|\n|\r/)
-    .map((line) => {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) return trimmed
-      const splitAt = trimmed.search(/\s/)
-      const keyword = (splitAt === -1 ? trimmed : trimmed.slice(0, splitAt)).toLowerCase()
-      let rest = splitAt === -1 ? '' : trimmed.slice(splitAt)
-      if (keyword === 'v' || keyword === 'vn' || keyword === 'vt') rest = rest.replace(/(\d),(\d)/g, '$1.$2')
-      else if (keyword === 'f' && rest.includes(',') && !rest.includes('/')) rest = rest.replace(/,/g, ' ')
-      return keyword + rest
-    })
-    .join('\n')
+  const prepared = text.split(/\r\n|\n|\r/).map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) return trimmed
+    const splitAt = trimmed.search(/\s/)
+    const keyword = (splitAt === -1 ? trimmed : trimmed.slice(0, splitAt)).toLowerCase()
+    let rest = splitAt === -1 ? '' : trimmed.slice(splitAt)
+    if (keyword === 'v' || keyword === 'vn' || keyword === 'vt') rest = rest.replace(/(\d),(\d)/g, '$1.$2')
+    else if (keyword === 'f' && rest.includes(',') && !rest.includes('/')) rest = rest.replace(/,/g, ' ')
+    return keyword + rest
+  })
+  // A few stray "l" edges in an otherwise faced mesh make the loader draw every triangle as a line.
+  if (prepared.some((line) => line.startsWith('f '))) return prepared.filter((line) => !line.startsWith('l ')).join('\n')
+  return prepared.join('\n')
+}
+
+function textureFileName(value: string): string {
+  const cleaned = value.trim().replace(/^["']|["']$/g, '')
+  return cleaned.split(/[/\\]/).pop() || cleaned
 }
 
 function readObj(text: string, materials: ReturnType<typeof materialsForObj>, label: string): MeshPart[] {
