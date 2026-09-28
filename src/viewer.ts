@@ -30,8 +30,8 @@ type Entry = {
   visible: boolean
   transparency: number
   wireframe: boolean
-  mesh: THREE.Mesh
-  material: THREE.MeshStandardMaterial
+  mesh: THREE.Mesh | THREE.Points | THREE.Line
+  material: THREE.MeshStandardMaterial | THREE.PointsMaterial | THREE.LineBasicMaterial
   map: THREE.Texture | null
 }
 
@@ -153,7 +153,7 @@ export class ModelViewer {
         const parts = parseMesh(file.name, file.buffer, assets, this.blobUrls)
         if (parts.length === 0) throw new Error('empty')
         for (const part of parts) {
-          this.addMesh(part.name, part.geometry, index, part.map)
+          this.addMesh(part.name, part.geometry, index, part.map, part.kind)
           loaded.push(part.name)
         }
       } catch {
@@ -311,8 +311,14 @@ export class ModelViewer {
     this.hasVertexColors = false
   }
 
-  private addMesh(name: string, geometry: THREE.BufferGeometry, index: number, map?: THREE.Texture | null): void {
-    geometry.computeVertexNormals()
+  private addMesh(
+    name: string,
+    geometry: THREE.BufferGeometry,
+    index: number,
+    map?: THREE.Texture | null,
+    kind: 'mesh' | 'points' | 'line' = 'mesh',
+  ): void {
+    if (kind === 'mesh') geometry.computeVertexNormals()
     const hasColors = geometry.hasAttribute('color')
     const color = colorForName(name, index)
     const texture = map ?? null
@@ -320,14 +326,26 @@ export class ModelViewer {
       texture.colorSpace = THREE.SRGBColorSpace
       texture.needsUpdate = true
     }
-    const material = new THREE.MeshStandardMaterial({
-      color: texture ? 0xffffff : color,
-      map: texture,
-      roughness: /teeth|tooth/i.test(name) ? 0.28 : /nerve/i.test(name) ? 0.42 : 0.64,
-      metalness: 0,
-      side: THREE.DoubleSide,
-    })
-    const mesh = new THREE.Mesh(geometry, material)
+    const material =
+      kind === 'points'
+        ? new THREE.PointsMaterial({
+            color: texture ? 0xffffff : color,
+            map: texture,
+            size: 2,
+            sizeAttenuation: false,
+            vertexColors: hasColors,
+          })
+        : kind === 'line'
+          ? new THREE.LineBasicMaterial({ color })
+          : new THREE.MeshStandardMaterial({
+              color: texture ? 0xffffff : color,
+              map: texture,
+              roughness: /teeth|tooth/i.test(name) ? 0.28 : /nerve/i.test(name) ? 0.42 : 0.64,
+              metalness: 0,
+              side: THREE.DoubleSide,
+            })
+    const mesh =
+      kind === 'points' ? new THREE.Points(geometry, material) : kind === 'line' ? new THREE.LineSegments(geometry, material) : new THREE.Mesh(geometry, material)
     const entry: Entry = {
       id: `mesh-${this.entries.length}`,
       name,
@@ -382,8 +400,10 @@ export class ModelViewer {
     entry.material.map = useVertex ? null : entry.map
     entry.material.color.set(useVertex || entry.map ? 0xffffff : entry.color)
     entry.material.vertexColors = useVertex
-    entry.material.flatShading = this.shading === 'flat'
-    entry.material.wireframe = entry.wireframe
+    if (entry.material instanceof THREE.MeshStandardMaterial) {
+      entry.material.flatShading = this.shading === 'flat'
+      entry.material.wireframe = entry.wireframe
+    }
     const opacity = 1 - entry.transparency
     entry.material.opacity = opacity
     entry.material.transparent = entry.transparency > 0.001
@@ -532,7 +552,7 @@ function meshKind(filename: string, buffer: ArrayBuffer): 'stl' | 'ply' | 'obj' 
   throw new Error(`Unsupported file ${filename}`)
 }
 
-type MeshPart = { name: string; geometry: THREE.BufferGeometry; map: THREE.Texture | null }
+type MeshPart = { name: string; geometry: THREE.BufferGeometry; map: THREE.Texture | null; kind: 'mesh' | 'points' | 'line' }
 
 function assetMap(files: Array<{ name: string; buffer: ArrayBuffer }>): Map<string, ArrayBuffer> {
   const assets = new Map<string, ArrayBuffer>()
@@ -576,7 +596,7 @@ function materialsForObj(filename: string, text: string, assets: Map<string, Arr
     }
     return blobUrl
   })
-  const creator = new MTLLoader(manager).parse(new TextDecoder().decode(mtl), '')
+  const creator = new MTLLoader(manager).parse(decodeMeshText(mtl), '')
   creator.preload()
   return creator
 }
@@ -585,6 +605,65 @@ function materialMap(material: THREE.Material | THREE.Material[]): THREE.Texture
   const first = Array.isArray(material) ? material[0] : material
   const map = (first as THREE.MeshPhongMaterial).map
   return map ?? null
+}
+
+function decodeMeshText(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(buffer).replace(/^\uFEFF/, '')
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(buffer).replace(/^\uFEFF/, '')
+  }
+  let zeros = 0
+  const sample = Math.min(bytes.length, 64)
+  for (let i = 1; i < sample; i += 2) if (bytes[i] === 0) zeros += 1
+  if (sample > 16 && zeros > sample / 4) return new TextDecoder('utf-16le').decode(buffer).replace(/^\uFEFF/, '')
+  return new TextDecoder('utf-8').decode(buffer).replace(/^\uFEFF/, '')
+}
+
+function prepareObjText(text: string): string {
+  return text
+    .split(/\r\n|\n|\r/)
+    .map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) return trimmed
+      const splitAt = trimmed.search(/\s/)
+      const keyword = (splitAt === -1 ? trimmed : trimmed.slice(0, splitAt)).toLowerCase()
+      let rest = splitAt === -1 ? '' : trimmed.slice(splitAt)
+      if (keyword === 'v' || keyword === 'vn' || keyword === 'vt') rest = rest.replace(/(\d),(\d)/g, '$1.$2')
+      else if (keyword === 'f' && rest.includes(',') && !rest.includes('/')) rest = rest.replace(/,/g, ' ')
+      return keyword + rest
+    })
+    .join('\n')
+}
+
+function readObj(text: string, materials: ReturnType<typeof materialsForObj>, label: string): MeshPart[] {
+  const loader = new OBJLoader()
+  if (materials) loader.setMaterials(materials)
+  let root: THREE.Group
+  try {
+    root = loader.parse(text)
+  } catch {
+    root = new OBJLoader().parse(text)
+  }
+  root.updateMatrixWorld(true)
+  const parts: MeshPart[] = []
+  root.traverse((obj) => {
+    const drawable = obj as THREE.Mesh
+    const kind = drawable.isMesh ? 'mesh' : (obj as THREE.Points).isPoints ? 'points' : (obj as THREE.Line).isLine ? 'line' : null
+    if (!kind) return
+    const geometry = drawable.geometry.clone()
+    geometry.applyMatrix4(drawable.matrixWorld)
+    parts.push({
+      name: drawable.name ? displayName(drawable.name) : label,
+      geometry,
+      map: materialMap(drawable.material),
+      kind,
+    })
+  })
+  if (parts.length === 1) parts[0].name = label
+  return parts
 }
 
 function parseMesh(
@@ -596,32 +675,38 @@ function parseMesh(
   const kind = meshKind(filename, buffer)
   const label = displayName(filename)
   if (kind === 'stl') {
-    return [{ name: label, geometry: new STLLoader().parse(buffer), map: null }]
+    return [{ name: label, geometry: new STLLoader().parse(buffer), map: null, kind: 'mesh' }]
   }
   if (kind === 'ply') {
-    return [{ name: label, geometry: new PLYLoader().parse(buffer), map: null }]
+    return [{ name: label, geometry: new PLYLoader().parse(buffer), map: null, kind: 'mesh' }]
   }
   if (kind === 'obj') {
-    const text = new TextDecoder().decode(buffer)
-    const loader = new OBJLoader()
-    const materials = materialsForObj(filename, text, assets, blobUrls)
-    if (materials) loader.setMaterials(materials)
-    const root = loader.parse(text)
-    root.updateMatrixWorld(true)
-    const parts: MeshPart[] = []
-    root.traverse((obj) => {
-      const mesh = obj as THREE.Mesh
-      if (!mesh.isMesh) return
-      const geometry = mesh.geometry.clone()
-      geometry.applyMatrix4(mesh.matrixWorld)
-      parts.push({
-        name: mesh.name ? displayName(mesh.name) : label,
-        geometry,
-        map: materialMap(mesh.material),
-      })
-    })
-    if (parts.length === 1) parts[0].name = label
+    const text = prepareObjText(decodeMeshText(buffer))
+    let materials: ReturnType<typeof materialsForObj> = null
+    try {
+      materials = materialsForObj(filename, text, assets, blobUrls)
+    } catch {
+      materials = null
+    }
+    let parts = readObj(text, materials, label)
+    if (!parts.length && materials) parts = readObj(text, null, label)
+    if (parts.length) return parts
+    const sniffed = sniffContent(buffer)
+    if (sniffed === 'stl') return [{ name: label, geometry: new STLLoader().parse(buffer), map: null, kind: 'mesh' }]
+    if (sniffed === 'ply') return [{ name: label, geometry: new PLYLoader().parse(buffer), map: null, kind: 'mesh' }]
     return parts
   }
   throw new Error(`Unsupported file ${filename}`)
+}
+
+function sniffContent(buffer: ArrayBuffer): 'stl' | 'ply' | 'obj' | null {
+  if (buffer.byteLength >= 84) {
+    const count = new DataView(buffer).getUint32(80, true)
+    if (count > 0 && buffer.byteLength === 84 + count * 50) return 'stl'
+  }
+  const head = decodeMeshText(buffer.slice(0, Math.min(buffer.byteLength, 4096))).trimStart().toLowerCase()
+  if (head.startsWith('ply')) return 'ply'
+  if (head.startsWith('solid') && head.includes('facet')) return 'stl'
+  if (/^(v |vn |vt |f |mtllib )/m.test(head)) return 'obj'
+  return null
 }
